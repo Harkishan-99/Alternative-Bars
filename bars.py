@@ -4,10 +4,11 @@ This script will server backends for all Alternative Bars
 import os
 from typing import Union
 
+import csv
 import asyncio
-import time
 import numpy as np
 import pandas as pd
+
 
 from connection import Client
 
@@ -17,12 +18,15 @@ class EventDrivenBars:
 
     def __init__(self, bar_type:str, threshold:int, savefile:str):
         """
+        This is a base class for generating EventDrivenBars.
+
         :param bar_type :(str) Type of bar to form. Either "tick_bar", "volume_bar" or "dollar_bar"
         :param threshold :(int) threshold value for sampling.
         :param savefile :(str) the path to store the bars as CSV.
         """
-        #initialize the threshold
+        #initialize the threshold and savefile
         self.threshold = threshold
+        self.save_file = savefile
         #a variable to store the previous trade price
         self.prev_price = None
         #store price volume and trade_side
@@ -39,13 +43,7 @@ class EventDrivenBars:
             self.stat = 'cum_tick'
         else:
             raise ValueError(f'{bar_type} is not a valid bar. Please enter either "dollar_bar","volume_bar" or "tick_bar"')
-        #flag to indicate header of the csv file
-        self.header = True
-        #create a save file
-        savefile = savefile + '/' + bar_type
-        if not os.path.exists(savefile):
-            os.makedirs(savefile)
-        self.save = savefile + '/' + str(int(time.time())) + '.csv'
+
 
     def _reset_cache(self):
         """
@@ -64,19 +62,23 @@ class EventDrivenBars:
         if self.prev_price is None:
             self.prev_price = price
             return 0
+        #sign of the change or difference from LTP
         sign = np.sign(price - self.prev_price)
         self.prev_price = price
         return sign
 
-    def save_bar(self, bar:dict):
+    def save_bar(self, bar:list):
         """
         Append the bars to the CSV using pandas.
 
-        :param bar :(dict)  the dictionary of a bar containing the aggregated values.
+        :param bar :(list)  the dictionary of a bar containing the aggregated values.
         """
-        #save the bars to csv
-        pd.DataFrame(bar).to_csv(self.save, header=self.header, index=False, mode='a')
-        self.header = False
+        # Open file in append mode
+        with open(self.save_file, 'a+', newline='') as write_obj:
+            # Create a writer object from csv module
+            csv_writer = csv.writer(write_obj)
+            # Add contents of list as last row in the csv file
+            csv_writer.writerow(bar)
 
     def aggregate_bar(self, data):
         """
@@ -98,11 +100,12 @@ class EventDrivenBars:
 
         if self.cum_count[self.stat] >= self.threshold:
             vwap = np.multiply(self.price, self.volume).sum() / sum(self.volume) #getting the vwap
-            bar = {'timestamp': [str(data.timestamp)] ,'open':[self.price[0]], 'high':[max(self.price)],
-                   'low': [min(self.price)], 'close': [data.price], 'vwap' : vwap}
+            bar = {'timestamp': str(data.timestamp) ,"symbol" : data.symbol,'open':self.price[0],
+                   'high':max(self.price), 'low': min(self.price), 'close': data.price, 'vwap' : vwap}
+            #join the cumulative metrics to the bar
             bar.update(self.cum_count)
-            self.save_bar(bar)
-            bar.update({"symbol" : data.symbol}) #to display the bar
+            #save the bar
+            self.save_bar(list(bar.values()))
             print(bar)
             self._reset_cache()
             return bar
@@ -119,21 +122,44 @@ def get_bars(bar_type:str, symbols:Union[str, list], threshold:Union[int, dict],
                       ticker symbols and values are the thresholds respectively.
     :param save_to :(str) the path to store the bars.
     """
-    instances = {} #to initiate instances of
+    #create a save file and a directory structure
+    save_to = save_to + '/' + bar_type
+    if not os.path.exists(save_to):
+        os.makedirs(save_to)
+    #the file path and name
+    save_to = save_to + '/' + 'realtime.csv'
+    #check if the file exist
+    if not os.path.exists(save_to):
+        #write the header of the CSV file
+        with open(save_to, 'w', newline='') as f:
+            #the header
+            header_ = ['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'vwap',
+                       'cum_tick', 'cum_volume', 'cum_dollar_value','cum_buy_tick',
+                       'cum_buy_volume', 'cum_buy_dollar_value']
+            # Create a writer object from csv module
+            csv_writer = csv.writer(f)
+            # Add contents of list as last row in the csv file
+            csv_writer.writerow(header_)
+    #if it the file exists then we will append the bars to the same file.
+    #initiate instances of symbols
+    instances = {}
     if isinstance(symbols, list):
         #multi-symbol
         channels = ['trade_updates'] + ['T.'+sym.upper() for sym in symbols]
         for symbol in symbols:
-            save = save_to + f'/{symbol}'
-            instances[symbol] = EventDrivenBars(bar_type, threshold[symbol], save)
+            #create a seperate instance for each symbols
+            instances[symbol] = EventDrivenBars(bar_type, threshold[symbol], save_to)
     else:
         #single symbols
         channels = ['trade_updates', f'T.{symbols.upper()}']
-        save = save_to + f'/{symbols}'
         if isinstance(threshold, int):
-            instances[symbols] = EventDrivenBars(bar_type, threshold, save)
+            #threshold is given as a int type
+            instances[symbols] = EventDrivenBars(bar_type, threshold, save_to)
+        elif isinstance(threshold, dict):
+            #threshold is given as a dict type
+            instances[symbols] = EventDrivenBars(bar_type, threshold[symbol], save_to)
         else:
-            instances[symbols] = EventDrivenBars(bar_type, threshold[symbol], save)
+            raise TypeError(f'The given threshold is a {type(threshold)} expecting a int or a dict')
 
     @conn.on(r'T$')
     async def on_trade(conn, channel, data):
@@ -151,6 +177,7 @@ def get_tick_bars(symbols:Union[str, list], threshold:Union[int, dict], save_to:
                       given if bars to generated for multiple symbols. The dictionary keys are
                       ticker symbols and values are the thresholds respectively.
     :param save_to :(str) the path to store the bars.
+    :return :(None)
     """
     get_bars('tick_bar', symbols, threshold, save_to)
 
