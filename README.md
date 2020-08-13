@@ -3,6 +3,14 @@ Generate Alternative Bars in real-time leveraging Alpaca API. User can generate 
 
 This project was inspired by the book [Advances in Financial Machine Learning](https://www.amazon.co.uk/Advances-Financial-Machine-Learning-Marcos/dp/1119482089).
 
+##Installation
+The algorithm was tested on the Alpaca Trade API version mentioned the requirements file and is considered as the stable version for this project.
+ 
+```bash
+
+pip install -r requirements.txt
+```
+
 ## Usage
 
 To generate Alternative user first need to have a Alpaca API either from a Paper Trading account or a Brokerage account. If you don't have one you can open a paper trade account  for free by visiting [Alpaca.market]([alpaca.market) and signing up.
