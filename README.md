@@ -3,7 +3,7 @@ Generate Alternative Bars in real-time leveraging Alpaca API. User can generate 
 
 This project was inspired by the book [Advances in Financial Machine Learning](https://www.amazon.co.uk/Advances-Financial-Machine-Learning-Marcos/dp/1119482089).
 
-##Installation
+## Installation
 The algorithm was tested on the Alpaca Trade API version mentioned the requirements file and is considered as the stable version for this project.
  
 ```bash
