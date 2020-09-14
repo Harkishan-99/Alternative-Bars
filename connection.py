@@ -22,3 +22,6 @@ class Client:
 
     def connect(self):
         return tradeapi.StreamConn(str(self.api_key), str(self.api_secret), str(self.base_url))
+
+    def api(self):
+        return tradeapi.REST(str(self.api_key), str(self.api_secret), str(self.base_url), api_version='v2')
