@@ -46,7 +46,7 @@ class TrendFollowing:
         self.collection_mode = True
         self.active_trade = False
         self.qty = qty
-        self.orders = []
+        self.open_order = None
 
     def read_data(self):
         """
@@ -80,15 +80,31 @@ class TrendFollowing:
             pass
         return ret[-self.window:].std()
 
-    def check_orders(self, side:str):
-        if len(self.orders) > 0:
-            #previous orders exists
-            if orders[0] == side:
-                try:
-                    api.cancel_by_client_order_id(order[1])
-                    return True
-                except:
-                    return False
+    def liquidate_position(self):
+        #check for brackets orders are present
+        self.cancel_orders()
+        #close the position
+        res = api.close_position(self.symbol)
+        #check if filled
+        status = api.get_order(res.id).status
+
+    def cancel_orders(self):
+        """
+        A function to handle cancelation of a open order.
+        """
+        try:
+            api.cancel_order(self.open_order.id)
+            self.open_order = None
+        except Exception as e:
+            if e.status_code == 404:
+                #order not found
+                pass
+            if e.status_code == 422:
+                #the order status is not cancelable.
+                pass
+                #print(e)
+                #break
+
 
     def OMS(self, BUY:bool, SELL:bool):
         """
@@ -120,7 +136,7 @@ class TrendFollowing:
             #check if counter position exists
             if self.active_trade and self.active_trade[0]=='short':
                 #exit the previous short SELL position
-                api.close_position(self.symbol)
+                self.liquidate_position()
             #enter a new BUY
             tp = self.price[-1] + (self.price[-1] * self.TP * vol)
             sl = self.price[-1] - (self.price[-1] * self.SL * vol)
@@ -131,7 +147,7 @@ class TrendFollowing:
             #check if counter position exists
             if self.active_trade and self.active_trade[0]=='long':
                 #exit the previous long BUY position
-                api.close_position(self.symbol)
+                self.liquidate_position()
             #enter a new BUY
             tp = self.price[-1] - (self.price[-1] * self.TP * vol)
             sl = self.price[-1] + (self.price[-1] * self.SL * vol)
@@ -139,13 +155,15 @@ class TrendFollowing:
 
         if market_closing > 30 :
             #no more new trades after 30 mins till market close.
-            #cancel all orders before sending a new order
-            api.cancel_all_orders()
+
+            if self.open_order is not None:
+                #cancel any open orders before sending a new order
+                self.cancel_orders()
             #submit a bracket order.
-            api.submit_order(symbol=self.symbol, qty=self.qty, side=side,
-                             type='market', time_in_force='day',
-                             order_class='bracket', stop_loss=dict(stop_price=str(sl)),
-                             take_profit=dict(limit_price=str(tp)))
+            self.open_order= api.submit_order(symbol=self.symbol, qty=self.qty, side=side,
+                                              type='market', time_in_force='day',
+                                              order_class='bracket', stop_loss=dict(stop_price=str(sl)),
+                                              take_profit=dict(limit_price=str(tp)))
 
     def on_bar(self, bar:dict):
         """
@@ -210,6 +228,23 @@ def get_instances(symbols:dict):
                               qty=symbols[symbol][1], window_size=symbols[symbol][2])]
     return instances
 
+def close_all():
+
+    try:
+        api.cancel_all_orders()
+    except Exception as e:
+        if e.status_code == 404:
+            #no orders found
+            pass
+    try:
+        api.close_all_positions()
+
+    except Exception as e:
+        if e.status_code == 500:
+            #failed to liquidate
+            #break
+            pass
+
 def run(symbols:dict:dict):
     """
     The main function that run the strategy.
@@ -223,6 +258,9 @@ def run(symbols:dict:dict):
     else:
     	time_to_open = clock.next_open - clock.timestamp
     	sleep(time_to_open.total_seconds())
+
+    #close any open positions or orders
+    close_all()
 
     channels = ['trade_updates'] + ['T.'+sym.upper() for sym in symbols.keys()]
     #generate instances
@@ -245,7 +283,7 @@ def run(symbols:dict:dict):
 
         if market_closing < 10 :
             #liquidate all positions at 10 mins to market close.
-            api.close_all_positions()
+            close_all()   
 			next_market_open = clock.next_open - clock.timestamp
 			sleep(next_market_open.total_seconds())
             #resting the thresholds
