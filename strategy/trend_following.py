@@ -46,6 +46,7 @@ class TrendFollowing:
         self.collection_mode = True
         self.active_trade = False
         self.qty = qty
+        self.orders = []
 
     def read_data(self):
         """
@@ -79,6 +80,16 @@ class TrendFollowing:
             pass
         return ret[-self.window:].std()
 
+    def check_orders(self, side:str):
+        if len(self.orders) > 0:
+            #previous orders exists
+            if orders[0] == side:
+                try:
+                    api.cancel_by_client_order_id(order[1])
+                    return True
+                except:
+                    return False
+
     def OMS(self, BUY:bool, SELL:bool):
         """
         An order management system that handles the orders and positions for given
@@ -93,52 +104,48 @@ class TrendFollowing:
         clock = api.get_clock()
     	closing = clock.next_close - clock.timestamp
     	market_closing =  round(closing.seconds/60)
+
+        #check for open position
+        try:
+            pos = api.get_position(self.symbol)
+            self.active_trade = [pos["side"], pos["qty"]]
+        except Exception as e:
+            if e.status_code == 404:
+                self.active_trade = False
+
+        #calculate the volatility
+        vol = self.get_volatility()
+
+        if BUY:
+            #check if counter position exists
+            if self.active_trade and self.active_trade[0]=='short':
+                #exit the previous short SELL position
+                api.close_position(self.symbol)
+            #enter a new BUY
+            tp = self.price[-1] + (self.price[-1] * self.TP * vol)
+            sl = self.price[-1] - (self.price[-1] * self.SL * vol)
+            side = 'buy'
+
+
+        if SELL:
+            #check if counter position exists
+            if self.active_trade and self.active_trade[0]=='long':
+                #exit the previous long BUY position
+                api.close_position(self.symbol)
+            #enter a new BUY
+            tp = self.price[-1] - (self.price[-1] * self.TP * vol)
+            sl = self.price[-1] + (self.price[-1] * self.SL * vol)
+            side = 'sell'
+
         if market_closing > 30 :
             #no more new trades after 30 mins till market close.
-            #check for open position
-            try:
-                pos = api.get_position(self.symbol)
-                self.active_trade = [pos["side"], pos["qty"]]
-            except Exception as e:
-                if e.status_code == 404:
-                    self.active_trade = False
-
-            if BUY:
-                #check if counter position exists
-                if self.active_trade and self.active_trade[0]=='short':
-                    #exit the previous short SELL position
-                    api.close_position(self.symbol)
-
-                #calculate the volatility
-                vol = self.get_volatility()
-                #cancel all orders before sending a new order
-                api.cancel_all_orders()
-                #enter a new BUY
-                tp = self.price[-1] + (self.price[-1] * self.TP * vol)
-                sl = self.price[-1] - (self.price[-1] * self.SL * vol)
-                side = 'buy'
-
-
-            if SELL:
-                #check if counter position exists
-                if self.active_trade and self.active_trade[0]=='long':
-                    #exit the previous long BUY position
-                    api.close_position(self.symbol)
-
-                #calculate the volatility
-                vol = self.get_volatility()
-                #cancel all orders before sending a new order
-                api.cancel_all_orders()
-                #enter a new BUY
-                tp = self.price[-1] - (self.price[-1] * self.TP * vol)
-                sl = self.price[-1] + (self.price[-1] * self.SL * vol)
-                side = 'sell'
-
+            #cancel all orders before sending a new order
+            api.cancel_all_orders()
             #submit a bracket order.
             api.submit_order(symbol=self.symbol, qty=self.qty, side=side,
-                                  type='market', time_in_force='day',
-                                  order_class='bracket', stop_loss=dict(stop_price=str(sl)),
-                                  take_profit=dict(limit_price=str(tp)))
+                             type='market', time_in_force='day',
+                             order_class='bracket', stop_loss=dict(stop_price=str(sl)),
+                             take_profit=dict(limit_price=str(tp)))
 
     def on_bar(self, bar:dict):
         """
@@ -175,7 +182,7 @@ def get_current_thresholds(symbol:str, lookback:int):
     """
     df = api.get_barset(symbol, '1D', limit=lookback).df
     thres = df[symbol]['volume'].ewm(span=lookback).mean()[-1]
-    return thres//50
+    return int(thres/50)
 
 def get_instances(symbols:dict):
     """
@@ -188,7 +195,6 @@ def get_instances(symbols:dict):
     instances = {}
     if isinstance(symbols, list):
         #multi-symbol
-        channels = ['trade_updates'] + ['T.'+sym.upper() for sym in symbols]
         for symbol in symbols.keys():
             #create a seperate instance for each symbols
             #thresholds are generated as last 5 days exponential weighted avg. // 50.
@@ -197,8 +203,7 @@ def get_instances(symbols:dict):
                                  TrendFollowing(symbol, bar_type=symbols[symbol][0], TP=2, SL=1,
                                  qty=symbols[symbol][1], window_size=symbols[symbol][2])]
     else:
-        #single symbols
-        channels = ['trade_updates', f'T.{symbols.upper()}']
+
         #threshold is given as a int type
         instances[symbols] = [EventDrivenBars(symbols[symbol][0], get_current_thresholds(symbol, lookback=5), save_to),
                               TrendFollowing(symbol, bar_type=symbols[symbol][0], TP=2, SL=1,
@@ -219,6 +224,8 @@ def run(symbols:dict:dict):
     	time_to_open = clock.next_open - clock.timestamp
     	sleep(time_to_open.total_seconds())
 
+    channels = ['trade_updates'] + ['T.'+sym.upper() for sym in symbols.keys()]
+    #generate instances
     instances = get_instances(symbols)
 
     @conn.on(r'T$')
