@@ -5,11 +5,14 @@ This project was inspired by the book [Advances in Financial Machine Learning](h
 
 ## Installation
 The algorithm was tested on the Alpaca Trade API version mentioned the requirements file and is considered as the stable version for this project.
- 
+
 ```bash
 
 pip install -r requirements.txt
 ```
+
+For running the trend-following strategy user need have [ta-lib](https://mrjbq7.github.io/ta-lib/doc_index.html) a python package for technical indicators. If pip
+install fails user can refer this [blog post](https://blog.quantinsti.com/install-ta-lib-python/) to install TA-Lib.
 
 ## Usage
 
@@ -44,4 +47,26 @@ get_tick_bars(symbols, tick_bar_threshold, 'sample_datasets')
 get_volume_bars(symbols, volume_bar_threshold, 'sample_datasets')
 #setup for receiving tdollar bars for given thresholds
 get_dollar_bars(symbols, dollar_bar_threshold, 'sample_datasets')
+```
+
+### 3) Trading Strategy
+
+To run the strategy user is need to initialize the algorithm with assets dictionary and a sampling frequency for Alternative Bars.
+The assets dictionary must have a list with values as bar_type, quantity to trade, bollinger bands window size, Take Profit and Stop-Loss, respectively
+as values and assets symbol as key.
+
+```python
+from trend_following import run
+
+#settings
+#-------------------------------
+#Running this strategy on two stocks : AAPL and AMZN
+#with with trade quantity of 50 and 20 respectively
+#both share same setting for Bollinger Bands lookback i.e. 50 bars
+#and TP/SL as 2/1
+symbols = {'AAPL' : ['volume_bar', 50, 15, 2, 1],
+           'AMZN' : ['volume_bar', 30, 15, 2, 1]}
+bars_per_day = 5000 #sampling frequency
+#passing the symbols and running it.
+run(symbols, bars_per_day)
 ```
