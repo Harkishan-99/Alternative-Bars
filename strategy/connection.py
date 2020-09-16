@@ -14,7 +14,7 @@ class Client:
         Establish the API connection
         """
         configParser = ConfigParser.RawConfigParser()
-        configFile = 'config.cfg'
+        configFile = '../config.cfg'
         configParser.read(configFile)
         self.api_key = configParser.get('alpaca', 'api_key')
         self.api_secret = configParser.get('alpaca', 'api_secret')
