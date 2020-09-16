@@ -19,7 +19,6 @@ class EventDrivenBars:
     def __init__(self, bar_type:str, threshold:int, savefile:str):
         """
         This is a base class for generating EventDrivenBars.
-
         :param bar_type :(str) Type of bar to form. Either "tick_bar", "volume_bar" or "dollar_bar"
         :param threshold :(int) threshold value for sampling.
         :param savefile :(str) the path to store the bars as CSV.
@@ -56,7 +55,6 @@ class EventDrivenBars:
     def _check_tick_sign(self, price:float):
         """
         A function to calculate the side of the trade based on tick rule.
-
         :param price :(float) current price.
         """
         if self.prev_price is None:
@@ -70,7 +68,6 @@ class EventDrivenBars:
     def save_bar(self, bar:list):
         """
         Append the bars to the CSV using pandas.
-
         :param bar :(list)  the dictionary of a bar containing the aggregated values.
         """
         # Open file in append mode
@@ -83,7 +80,6 @@ class EventDrivenBars:
     def aggregate_bar(self, data):
         """
         Aggregate with the arrival of new trades data
-
         :param data : A data object containing the ticks of a single timestamp or tick.
         """
         self.cum_count['cum_tick'] += 1
@@ -106,7 +102,6 @@ class EventDrivenBars:
             bar.update(self.cum_count)
             #save the bar
             self.save_bar(list(bar.values()))
-            print(bar)
             self._reset_cache()
             return bar
         return False
@@ -114,7 +109,6 @@ class EventDrivenBars:
 def get_bars(bar_type:str, symbols:Union[str, list], threshold:Union[int, dict], save_to:str):
     """
     Get the realtime bar using the Streaming API.
-
     :param bar_type :(str) Type of bar to form. Either "tick_bar", "volume_bar" or "dollar_bar".
     :param symbols :(str or list) a ticker symbol or a list of ticker symbols to generate the bars.
     :param threshold :(int or dict) threshold for bar formation or sampling. A dictionary must be
@@ -165,13 +159,12 @@ def get_bars(bar_type:str, symbols:Union[str, list], threshold:Union[int, dict],
     async def on_trade(conn, channel, data):
          if data.symbol in instances and data.price > 0 and data.size > 0:
              bar = instances[data.symbol].aggregate_bar(data)
-
+             print(bar)
     conn.run(channels)
 
 def get_tick_bars(symbols:Union[str, list], threshold:Union[int, dict], save_to:str):
     """
     Get RealTime Tick Bars.
-
     :param symbols :(str or list) a ticker symbol or a list of ticker symbols to generate the bars.
     :param threshold :(int or dict) threshold for bar formation or sampling. A dictionary must be
                       given if bars to generated for multiple symbols. The dictionary keys are
@@ -184,7 +177,6 @@ def get_tick_bars(symbols:Union[str, list], threshold:Union[int, dict], save_to:
 def get_volume_bars(symbols:Union[str, list], threshold:Union[int, dict], save_to:str):
         """
         Get RealTime Volume Bars.
-
         :param symbols :(str or list) a ticker symbol or a list of ticker symbols to generate the bars.
         :param threshold :(int or dict) threshold for bar formation or sampling. A dictionary must be
                           given if bars to generated for multiple symbols. The dictionary keys are
@@ -196,7 +188,6 @@ def get_volume_bars(symbols:Union[str, list], threshold:Union[int, dict], save_t
 def get_dollar_bars(symbols:Union[str, list], threshold:Union[int, dict], save_to:str):
         """
         Get RealTime Dollar Bars.
-
         :param symbols :(str or list) a ticker symbol or a list of ticker symbols to generate the bars.
         :param threshold :(int or dict) threshold for bar formation or sampling. A dictionary must be
                           given if bars to generated for multiple symbols. The dictionary keys are

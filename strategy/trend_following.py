@@ -10,19 +10,23 @@ when counter positions needed to be taken.
 we increase the position size.
 """
 #Imports
-
+import logging
 import talib as ta
 import numpy as np
 import pandas as pd
 from time import sleep
-from .bars import EventDrivenBars
-from .connection import Client
+from bars import EventDrivenBars
+from connection import Client
 
+#logging init
+logging.basicConfig(filename='error.log',level=logging.WARNING,  format='%(asctime)s:%(levelname)s:%(message)s')
+
+#setup the connection with the API
 client = Client()
 conn = client.connect()
 api = client.api()
 
-#Initialize the API
+
 
 class TrendFollowing:
     """
@@ -40,53 +44,65 @@ class TrendFollowing:
         #Initialize model parameters like TP, SL, thresholds etc.
         self.TP = 2 # times the current volatility.
         self.SL = 1 # times the current volatility.
-        self.window = window_size
-        self.symbol = symbol
-        self.bar_type = bar_type
-        self.collection_mode = True
-        self.active_trade = False
-        self.qty = qty
-        self.open_order = None
+        self.window = window_size #window size for bollinger bands
+        self.symbol = symbol #ticker symbol for the asset
+        self.bar_type = bar_type #bar_type for the strategy
+        self.collection_mode = True #a flag to know if the strategy is in a bar collecting mode
+        self.active_trade = False #to know if any active trade is present
+        self.qty = qty #quantity to trade (buy or sell)
+        self.open_order = None #to know if any open orders exists
+        self.prices = pd.Series()
+        #check if historical data exists
+        if self.read_data():
+            self.collection_mode = False
+        else:
+            print('On collection mode')
 
     def read_data(self):
         """
         A function to read the historical bar data.
         """
         try:
-            df = pd.read_csv(f'data/{bar_type}.csv', index_col=[0],
-                                parse_dates=[0], usecols=['symbol','close'])
-            price = df[df.symbol == self.symbol]['close']
+            df = pd.read_csv(f'data/{self.bar_type}.csv', index_col=[0],
+                                parse_dates=[0], usecols=['timestamp','symbol','close'])
             #the length of minimum data will be the window size +1 of BB
-            if not price.empty and len(price) > self.window:
-                self.prices = price
-                return True
-        except:
+            if not df.empty:
+                prices = df[df['symbol'] == self.symbol]['close']
+                if len(prices)> self.window:
+                    self.prices = prices[-self.window+1:]
+                    del df
+                    return True
+
+        except FileNotFoundError as e:
             pass
+
         return False
 
 
-    def get_volatility(self):
+    def get_volatility(self, frequency='1H'):
         """
         A function to get hourly volatility if enough data exists.
         Else will output minimum window_size volatility. The volatility
         will be used to set the TP an SL of a position.
         """
         ret = self.prices.pct_change()[1:]
-        try:
-            #get hourly volatility
-            vol = ret.groupby(pd.Grouper(freq='1H')).std()[-1]
-            return vol
-        except:
-            pass
-        return ret[-self.window:].std()
+        #get hourly volatility
+        vol = ret.groupby(pd.Grouper(freq=frequency)).std()[-1]
+        return vol
+
 
     def liquidate_position(self):
         #check for brackets orders are present
         self.cancel_orders()
-        #close the position
-        res = api.close_position(self.symbol)
-        #check if filled
-        status = api.get_order(res.id).status
+        try:
+            #close the position
+            res = api.close_position(self.symbol)
+            #check if filled
+            status = api.get_order(res.id).status
+
+        except Exception as e:
+            logging.exception(e)
+
 
     def cancel_orders(self):
         """
@@ -98,15 +114,15 @@ class TrendFollowing:
         except Exception as e:
             if e.status_code == 404:
                 #order not found
-                pass
+                logging.exception(e)
+
             if e.status_code == 422:
                 #the order status is not cancelable.
-                pass
-                #print(e)
+                logging.exception(e)
                 #break
 
 
-    def OMS(self, BUY:bool, SELL:bool):
+    def OMS(self, BUY:bool=False, SELL:bool=False):
         """
         An order management system that handles the orders and positions for given
         asset.
@@ -116,20 +132,17 @@ class TrendFollowing:
         :param SELL :(bool) if True will sell given quantity of asset at market price.
                     If a long BUY position is active, it will close the long position.
         """
-        #check for time till market closing.
-        clock = api.get_clock()
-    	closing = clock.next_close - clock.timestamp
-    	market_closing =  round(closing.seconds/60)
 
         #check for open position
         try:
             pos = api.get_position(self.symbol)
-            self.active_trade = [pos["side"], pos["qty"]]
+            self.active_trade = [pos.side, pos.qty]
         except Exception as e:
             if e.status_code == 404:
+                #position doesn't exist in the asset
                 self.active_trade = False
 
-        #calculate the volatility
+        #calculate the current volatility
         vol = self.get_volatility()
 
         if BUY:
@@ -137,9 +150,9 @@ class TrendFollowing:
             if self.active_trade and self.active_trade[0]=='short':
                 #exit the previous short SELL position
                 self.liquidate_position()
-            #enter a new BUY
-            tp = self.price[-1] + (self.price[-1] * self.TP * vol)
-            sl = self.price[-1] - (self.price[-1] * self.SL * vol)
+            #calculate TP and SL for BUY order
+            tp = self.prices[-1] + (self.prices[-1] * self.TP * vol)
+            sl = self.prices[-1] - (self.prices[-1] * self.SL * vol)
             side = 'buy'
 
 
@@ -148,12 +161,17 @@ class TrendFollowing:
             if self.active_trade and self.active_trade[0]=='long':
                 #exit the previous long BUY position
                 self.liquidate_position()
-            #enter a new BUY
-            tp = self.price[-1] - (self.price[-1] * self.TP * vol)
-            sl = self.price[-1] + (self.price[-1] * self.SL * vol)
+            #calculate TP and SL for SELL order
+            tp = self.prices[-1] - (self.prices[-1] * self.TP * vol)
+            sl = self.prices[-1] + (self.prices[-1] * self.SL * vol)
             side = 'sell'
 
-        if market_closing > 30 :
+        #check for time till market closing.
+        clock = api.get_clock()
+        closing = clock.next_close-clock.timestamp
+        market_closing =  round(closing.seconds/60)
+
+        if market_closing > 30 and (BUY or SELL):
             #no more new trades after 30 mins till market close.
 
             if self.open_order is not None:
@@ -172,23 +190,27 @@ class TrendFollowing:
 
         :param bar : (dict) a Alternative bar generated from EventDrivenBars class.
         """
-        if collection_mode:
-            if self.read_data:
+        if self.collection_mode:
+            self.prices = self.prices.append(pd.Series([bar['close']], index=[pd.to_datetime(bar['timestamp'])]))
+            if len(self.prices) > self.window:
                 self.collection_mode = False
-        else:
+
+        if not self.collection_mode:
             #append the current bar to the prices series
-            self.prices.append(bar.close, index=bar.timestamp)
+            self.prices = self.prices.append(pd.Series([bar['close']], index=[pd.to_datetime(bar['timestamp'])]))
             #get the BB
-            UB, MB, LB = ta.BBANDS(self.price, timeperiod=self.window, nbdevup=2, nbdevdn=2, matype=0)
+            UB, MB, LB = ta.BBANDS(self.prices, timeperiod=self.window, nbdevup=2, nbdevdn=2, matype=0)
             #check for entry conditions
-            if price[-2] <= UB[-1] and price[-1] > UB[-1]:
+            if self.prices[-2] <= UB[-1] and self.prices[-1] > UB[-1]:
                 #previous price was at or below the Upper BB and current price is above it.
                 self.OMS(BUY=True)
-            elif price[-2] >= LB[-1] and price[-1] < LB[-1]:
+                print("GO LONG")
+            elif self.prices[-2] >= LB[-1] and self.prices[-1] < LB[-1]:
                 #previous price was at or above the Upper BB and current price is below it.
                 self.OMS(SELL=True)
+                print("GO SHORT")
 
-def get_current_thresholds(symbol:str, lookback:int):
+def get_current_thresholds(symbol:str, bars_per_day:int, lookback:int):
     """
     Compute the dynamic threshold for a given asset symbol.
     The threshold is computed using exponentially weight average
@@ -197,94 +219,112 @@ def get_current_thresholds(symbol:str, lookback:int):
 
     :param symbol : (str) asset symbol.
     :param lookback : (int) lookback window/ span.
+    :param bars_per_day : (int) number bars to yield per day.
     """
     df = api.get_barset(symbol, '1D', limit=lookback).df
     thres = df[symbol]['volume'].ewm(span=lookback).mean()[-1]
-    return int(thres/50)
+    return int(thres/bars_per_day)
 
-def get_instances(symbols:dict):
+def get_instances(symbols:dict, bars_per_day:int=50):
     """
     Generate instances for multiple symbols and configurations for the trend trend following
     strategy.
 
     :param symbols : (dict) a dictionary with keys as the asset symbols and values as a list of
-                    following - [bar_type, quantity, window_size] all in the given order.
+                    following - [bar_type, quantity, window_size, TP, SL] all in the given order.
+    :param bars_per_day : (int) number bars to yield per day.
     """
     instances = {}
-    if isinstance(symbols, list):
-        #multi-symbol
-        for symbol in symbols.keys():
-            #create a seperate instance for each symbols
-            #thresholds are generated as last 5 days exponential weighted avg. // 50.
-            #why 50 ?? to  yield approx. 50 bars a day.
-            instances[symbol] = [EventDrivenBars(symbols[symbol][0], get_current_thresholds(symbol, lookback=5), save_to),
-                                 TrendFollowing(symbol, bar_type=symbols[symbol][0], TP=2, SL=1,
-                                 qty=symbols[symbol][1], window_size=symbols[symbol][2])]
-    else:
+    #directory to save the bars
+    save_to = 'data'
+    for symbol in symbols.keys():
+        #create a seperate instance for each symbols
+        #thresholds are generated as last 5 days exponential weighted avg. / 50.
+        #why 50 ?? to  yield approx. 50 bars a day.
+        bar_type=symbols[symbol][0]
+        qty=symbols[symbol][1]
+        TP=symbols[symbol][3]
+        SL=symbols[symbol][4]
+        window=symbols[symbol][2]
+        #create objects of both the classes
+        instances[symbol] = [EventDrivenBars(bar_type, get_current_thresholds(symbol, bars_per_day, lookback=5,), save_to),
+                             TrendFollowing(symbol, bar_type, TP, SL, qty, window)]
 
-        #threshold is given as a int type
-        instances[symbols] = [EventDrivenBars(symbols[symbol][0], get_current_thresholds(symbol, lookback=5), save_to),
-                              TrendFollowing(symbol, bar_type=symbols[symbol][0], TP=2, SL=1,
-                              qty=symbols[symbol][1], window_size=symbols[symbol][2])]
     return instances
 
 def close_all():
+    """
+    A funtion to close all existing orders and
+    positions for a account.
+    """
 
     try:
         api.cancel_all_orders()
     except Exception as e:
         if e.status_code == 404:
             #no orders found
+            logging.exception(e)
             pass
+
     try:
         api.close_all_positions()
-
     except Exception as e:
         if e.status_code == 500:
             #failed to liquidate
+            logging.exception(e)
             #break
             pass
 
-def run(symbols:dict:dict):
+def run(assets:dict, bars_per_day:int=50):
     """
     The main function that run the strategy.
 
-    :param symbols : (dict) a dictionary with keys as the asset symbols and values as a list of
-                    following - [bar_type, quantity, window_size] all in the given order.
+    :param assets : (dict) a dictionary with keys as the asset symbols and values as a list of
+                    following - [bar_type, quantity, window_size, TP, SL] all in the given order.
+    :param bars_per_day : (int) number bars to yield per day.
     """
+    #a variable that signifies if the strategy is running or not
+    STRATEGY_ON = True
     clock = api.get_clock()
     if clock.is_open:
 	       pass
     else:
-    	time_to_open = clock.next_open - clock.timestamp
-    	sleep(time_to_open.total_seconds())
+        time_to_open = clock.next_open - clock.timestamp
+        print(f"Market is closed now going to sleep for {time_to_open.total_seconds()//60}")
+        sleep(time_to_open.total_seconds())
 
     #close any open positions or orders
     close_all()
 
-    channels = ['trade_updates'] + ['T.'+sym.upper() for sym in symbols.keys()]
+    #channels = ['trade_updates'] + ['T.'+sym.upper() for sym in assets.keys()]
+    channels = [sym.upper() for sym in assets.keys()]
     #generate instances
-    instances = get_instances(symbols)
+    instances = get_instances(assets, bars_per_day)
 
-    @conn.on(r'T$')
+    @conn.on(r'T\..+', channels)
     async def on_trade(conn, channel, data):
+         print(data)
          if data.symbol in instances and data.price > 0 and data.size > 0:
              bar = instances[data.symbol][0].aggregate_bar(data)
              if bar:
                 instances[data.symbol][1].on_bar(bar)
 
-    conn.run(channels)
+    conn.run(['trade_updates', 'T.*'])
 
     while True:
-
         clock = api.get_clock()
-    	closing = clock.next_close - clock.timestamp
-    	market_closing =  round(closing.seconds/60)
+        closing = clock.next_close-clock.timestamp
+        market_closing =  round(closing.seconds/60)
 
-        if market_closing < 10 :
+        if market_closing < 10 and STRATEGY_ON:
             #liquidate all positions at 10 mins to market close.
-            close_all()   
-			next_market_open = clock.next_open - clock.timestamp
-			sleep(next_market_open.total_seconds())
-            #resting the thresholds
-            instances = get_instances(symbols)
+            close_all()
+            STRATEGY_ON = False
+
+        if not clock.is_open:
+            #keep collecting bars till the end of the market hours
+            next_market_open = clock.next_open-clock.timestamp
+            sleep(next_market_open.total_seconds())
+            #reseting the thresholds and created new instances
+            instances = get_instances(assets)
+            STRATEGY_ON = True
