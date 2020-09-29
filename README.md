@@ -53,7 +53,7 @@ get_dollar_bars(symbols, dollar_bar_threshold, 'sample_datasets')
 
 To run the strategy user is need to initialize the algorithm with assets dictionary and a sampling frequency for Alternative Bars.
 The assets dictionary must have a list with values as bar_type, quantity to trade, bollinger bands window size, Take Profit and Stop-Loss, respectively
-as values and assets symbol as key.
+as values and assets symbol as key. These are also the parameters that can be tweaked. The ```bars_per_day ``` variable is to control the bar size.
 
 ```python
 from trend_following import run
@@ -62,11 +62,18 @@ from trend_following import run
 #-------------------------------
 #Running this strategy on two stocks : AAPL and AMZN
 #with with trade quantity of 50 and 30 respectively
-#both share same setting for Bollinger Bands lookback i.e. 50 bars
+#both share same setting for Bollinger Bands lookback i.e. 15 bars
 #and TP/SL as 2/1
 symbols = {'AAPL' : ['volume_bar', 50, 15, 2, 1],
            'AMZN' : ['volume_bar', 30, 15, 2, 1]}
 bars_per_day = 50 #sampling frequency i.e. number of bars per day
+#here we aiming to achieve approx. 50 bars per day
 #passing the symbols and running it.
 run(symbols, bars_per_day)
 ```
+
+### Disclaimer
+The trading strategy discussed here is for educational purpose only doesn't guarantee to make profit. Trading involves a high risk of losing money.
+Use the code provided here at your own risk. The author and AlpacaDB, Inc. are not responsible for your trading results i.e. any profit or loss caused
+by the algorithm.
+A user is advised to run the code on paper trading account only to understand the risk involved.
