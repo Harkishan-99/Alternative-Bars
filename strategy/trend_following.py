@@ -42,8 +42,8 @@ class TrendFollowing:
         :param window_size : (int) the lookback window for the Bollinger Band.
         """
         #Initialize model parameters like TP, SL, thresholds etc.
-        self.TP = 2 # times the current volatility.
-        self.SL = 1 # times the current volatility.
+        self.TP = TP # times the current volatility.
+        self.SL = SL # times the current volatility.
         self.window = window_size #window size for bollinger bands
         self.symbol = symbol #ticker symbol for the asset
         self.bar_type = bar_type #bar_type for the strategy
@@ -51,14 +51,14 @@ class TrendFollowing:
         self.active_trade = False #to know if any active trade is present
         self.qty = qty #quantity to trade (buy or sell)
         self.open_order = None #to know if any open orders exists
-        self.SL  = None #stop-loss of current position
-        self.TP  = None #take-profit of current position
+        self.sl  = None #stop-loss of current position
+        self.tp  = None #take-profit of current position
         self.prices = pd.Series()
         #check if historical data exists
         if self.read_data():
             self.collection_mode = False
         else:
-            print('On collection mode')
+            print(f'on collection mode for {symbol}')
 
     def read_data(self):
         """
@@ -103,8 +103,8 @@ class TrendFollowing:
             status = api.get_order(res.id).status
             #reset
             self.active_trade  = False
-            self.SL = None
-            self.TP = None
+            self.sl = None
+            self.tp = None
         except Exception as e:
             logging.exception(e)
 
@@ -151,7 +151,7 @@ class TrendFollowing:
         self.check_open_position()
         if self.active_trade:
             #check SL  and TP
-            if price <= self.SL or price >= self.TP:
+            if price <= self.sl or price >= self.tp:
                 #close the position
                 self.liquidate_position()
 
@@ -178,8 +178,8 @@ class TrendFollowing:
                 #exit the previous short SELL position
                 self.liquidate_position()
             #calculate TP and SL for BUY order
-            self.TP = self.prices[-1] + (self.prices[-1] * self.TP * vol)
-            self.SL = self.prices[-1] - (self.prices[-1] * self.SL * vol)
+            self.tp = self.prices[-1] + (self.prices[-1] * self.TP * vol)
+            self.sl = self.prices[-1] - (self.prices[-1] * self.SL * vol)
             side = 'buy'
 
 
@@ -189,8 +189,8 @@ class TrendFollowing:
                 #exit the previous long BUY position
                 self.liquidate_position()
             #calculate TP and SL for SELL order
-            self.TP  = self.prices[-1] - (self.prices[-1] * self.TP * vol)
-            self.SL  = self.prices[-1] + (self.prices[-1] * self.SL * vol)
+            self.tp  = self.prices[-1] - (self.prices[-1] * self.TP * vol)
+            self.sl  = self.prices[-1] + (self.prices[-1] * self.SL * vol)
             side = 'sell'
 
         #check for time till market closing.
@@ -207,8 +207,7 @@ class TrendFollowing:
             # submit a simple order.
             self.open_order= api.submit_order(symbol=self.symbol, qty=self.qty,
                                               side=side, type='market',
-                                              time_in_force='day',
-                                              order_class='simple')
+                                              time_in_force='day')
 
 
     def on_bar(self, bar:dict):
@@ -232,11 +231,11 @@ class TrendFollowing:
             if self.prices[-2] <= UB[-1] and self.prices[-1] > UB[-1]:
                 #previous price was at or below the Upper BB and current price is above it.
                 self.OMS(BUY=True)
-                print("GOING LONG")
+                #GOING LONG
             elif self.prices[-2] >= LB[-1] and self.prices[-1] < LB[-1]:
                 #previous price was at or above the Upper BB and current price is below it.
                 self.OMS(SELL=True)
-                print("GOING SHORT")
+                #GOING SHORT
 
 def get_current_thresholds(symbol:str, bars_per_day:int, lookback:int):
     """
@@ -275,7 +274,7 @@ def get_instances(symbols:dict, bars_per_day:int=50):
         SL=symbols[symbol][4]
         window=symbols[symbol][2]
         #create objects of both the classes
-        instances[symbol] = [EventDrivenBars(bar_type, get_current_thresholds(symbol, bars_per_day, lookback=5,), save_to),
+        instances[symbol] = [EventDrivenBars(bar_type, get_current_thresholds(symbol, bars_per_day, lookback=5), save_to),
                              TrendFollowing(symbol, bar_type, TP, SL, qty, window)]
 
     return instances
@@ -318,27 +317,26 @@ def run(assets:dict, bars_per_day:int=50):
 	       pass
     else:
         time_to_open = clock.next_open - clock.timestamp
-        print(f"Market is closed now going to sleep for {time_to_open.total_seconds()//60}")
+        print(f"Market is closed now going to sleep for {time_to_open.total_seconds()//60} minutes")
         sleep(time_to_open.total_seconds())
 
     #close any open positions or orders
     close_all()
 
-    #channels = ['trade_updates'] + ['T.'+sym.upper() for sym in assets.keys()]
-    channels = [sym.upper() for sym in assets.keys()]
+    channels = ['trade_updates'] + ['T.'+sym.upper() for sym in assets.keys()]
+
     #generate instances
     instances = get_instances(assets, bars_per_day)
 
-    @conn.on(r'T\..+', channels)
+    @conn.on(r'T$')
     async def on_trade(conn, channel, data):
-         print(data)
          if data.symbol in instances and data.price > 0 and data.size > 0:
              bar = instances[data.symbol][0].aggregate_bar(data)
              instances[data.symbol][1].RMS(data.price) #check TP & SL
              if bar:
                 instances[data.symbol][1].on_bar(bar)
 
-    conn.run(['trade_updates', 'T.*'])
+    conn.run(channels)
 
     while True:
         clock = api.get_clock()
