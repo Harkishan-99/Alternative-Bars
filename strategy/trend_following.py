@@ -51,6 +51,8 @@ class TrendFollowing:
         self.active_trade = False #to know if any active trade is present
         self.qty = qty #quantity to trade (buy or sell)
         self.open_order = None #to know if any open orders exists
+        self.SL  = None #stop-loss of current position
+        self.TP  = None #take-profit of current position
         self.prices = pd.Series()
         #check if historical data exists
         if self.read_data():
@@ -99,7 +101,10 @@ class TrendFollowing:
             res = api.close_position(self.symbol)
             #check if filled
             status = api.get_order(res.id).status
-
+            #reset
+            self.active_trade  = False
+            self.SL = None
+            self.TP = None
         except Exception as e:
             logging.exception(e)
 
@@ -121,6 +126,35 @@ class TrendFollowing:
                 logging.exception(e)
                 #break
 
+    def check_open_position(self):
+        """
+        Get any open position for the symbol
+        if exists.
+        """
+        try:
+            pos = api.get_position(self.symbol)
+            self.active_trade = [pos.side, pos.qty]
+        except Exception as e:
+            if e.status_code == 404:
+                #position doesn't exist in the asset
+                self.active_trade = False
+
+    def RMS(self, price:float):
+        """
+        If a position exists than check if take-profit or
+        stop-loss is reached. It is a simple risk-mangement
+        function.
+
+        :param price :(float) last trade price.
+        """
+
+        self.check_open_position()
+        if self.active_trade:
+            #check SL  and TP
+            if price <= self.SL or price >= self.TP:
+                #close the position
+                self.liquidate_position()
+
 
     def OMS(self, BUY:bool=False, SELL:bool=False):
         """
@@ -134,14 +168,7 @@ class TrendFollowing:
         """
 
         #check for open position
-        try:
-            pos = api.get_position(self.symbol)
-            self.active_trade = [pos.side, pos.qty]
-        except Exception as e:
-            if e.status_code == 404:
-                #position doesn't exist in the asset
-                self.active_trade = False
-
+        self.check_open_position()
         #calculate the current volatility
         vol = self.get_volatility()
 
@@ -151,8 +178,8 @@ class TrendFollowing:
                 #exit the previous short SELL position
                 self.liquidate_position()
             #calculate TP and SL for BUY order
-            tp = self.prices[-1] + (self.prices[-1] * self.TP * vol)
-            sl = self.prices[-1] - (self.prices[-1] * self.SL * vol)
+            self.TP = self.prices[-1] + (self.prices[-1] * self.TP * vol)
+            self.SL = self.prices[-1] - (self.prices[-1] * self.SL * vol)
             side = 'buy'
 
 
@@ -162,8 +189,8 @@ class TrendFollowing:
                 #exit the previous long BUY position
                 self.liquidate_position()
             #calculate TP and SL for SELL order
-            tp = self.prices[-1] - (self.prices[-1] * self.TP * vol)
-            sl = self.prices[-1] + (self.prices[-1] * self.SL * vol)
+            self.TP  = self.prices[-1] - (self.prices[-1] * self.TP * vol)
+            self.SL  = self.prices[-1] + (self.prices[-1] * self.SL * vol)
             side = 'sell'
 
         #check for time till market closing.
@@ -177,11 +204,12 @@ class TrendFollowing:
             if self.open_order is not None:
                 #cancel any open orders before sending a new order
                 self.cancel_orders()
-            #submit a bracket order.
-            self.open_order= api.submit_order(symbol=self.symbol, qty=self.qty, side=side,
-                                              type='market', time_in_force='day',
-                                              order_class='bracket', stop_loss=dict(stop_price=str(sl)),
-                                              take_profit=dict(limit_price=str(tp)))
+            # submit a simple order.
+            self.open_order= api.submit_order(symbol=self.symbol, qty=self.qty,
+                                              side=side, type='market',
+                                              time_in_force='day',
+                                              order_class='simple')
+
 
     def on_bar(self, bar:dict):
         """
@@ -204,11 +232,11 @@ class TrendFollowing:
             if self.prices[-2] <= UB[-1] and self.prices[-1] > UB[-1]:
                 #previous price was at or below the Upper BB and current price is above it.
                 self.OMS(BUY=True)
-                print("GO LONG")
+                print("GOING LONG")
             elif self.prices[-2] >= LB[-1] and self.prices[-1] < LB[-1]:
                 #previous price was at or above the Upper BB and current price is below it.
                 self.OMS(SELL=True)
-                print("GO SHORT")
+                print("GOING SHORT")
 
 def get_current_thresholds(symbol:str, bars_per_day:int, lookback:int):
     """
@@ -306,6 +334,7 @@ def run(assets:dict, bars_per_day:int=50):
          print(data)
          if data.symbol in instances and data.price > 0 and data.size > 0:
              bar = instances[data.symbol][0].aggregate_bar(data)
+             instances[data.symbol][1].RMS(data.price) #check TP & SL
              if bar:
                 instances[data.symbol][1].on_bar(bar)
 
