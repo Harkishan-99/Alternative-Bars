@@ -4,6 +4,7 @@ This script creates various object to connect with different components of Trade
 import configparser as ConfigParser
 import alpaca_trade_api as tradeapi
 
+
 class Client:
     """
     A class to establish the connection with the brokers API.
@@ -21,7 +22,9 @@ class Client:
         self.base_url = configParser.get('alpaca', 'base_url')
 
     def connect(self):
-        return tradeapi.StreamConn(str(self.api_key), str(self.api_secret), str(self.base_url), data_stream='polygon')
+        return tradeapi.StreamConn(str(self.api_key), str(
+            self.api_secret), str(self.base_url))
 
     def api(self):
-        return tradeapi.REST(str(self.api_key), str(self.api_secret), str(self.base_url), api_version='v2')
+        return tradeapi.REST(str(self.api_key), str(
+            self.api_secret), str(self.base_url), api_version='v2')
