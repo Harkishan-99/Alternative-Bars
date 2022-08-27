@@ -1,4 +1,4 @@
-numpy==1.18.5
+numpy==1.22.0
 pandas==1.0.3
 alpaca-trade-api==0.42
 TA-Lib==0.4.18
